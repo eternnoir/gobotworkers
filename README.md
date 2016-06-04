@@ -1,0 +1,2 @@
+# gobotworkers
+Workers for gobot
