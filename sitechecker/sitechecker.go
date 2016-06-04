@@ -3,7 +3,6 @@ package sitechecker
 import (
 	"bytes"
 	"errors"
-	"fmt"
 	"github.com/BurntSushi/toml"
 	log "github.com/Sirupsen/logrus"
 	"github.com/eternnoir/gobot"
@@ -33,6 +32,7 @@ type NotifyPayload struct {
 	SiteName   string
 	SiteUrl    string
 	StatusCode string
+	Msg        string
 }
 
 func (w *SiteChecker) Init(bot *gobot.Gobot) error {
@@ -89,7 +89,15 @@ func (w *SiteChecker) checkAndSendResult(siteName, url string) {
 	resp, err := CheckStatus(url)
 	if err != nil {
 		log.Debugf("Check %s %s Fail, error %s", siteName, url, err)
-		w.bot.Send(fmt.Sprintf("Check site %s Fail. Error %s", siteName, err))
+		var doc bytes.Buffer
+		err = w.MessageTemplate.Execute(&doc, NotifyPayload{SiteName: siteName, SiteUrl: url, Msg: err.Error()})
+		if err != nil {
+			log.Errorf("Conver template error. %s", err)
+			return
+		}
+		msg := doc.String()
+		log.Infof("[%s] Send message. %s", WORKER_ID, msg)
+		w.bot.Send(msg)
 		return
 	}
 	log.Debugf("Check %s %s , result %s", siteName, url, resp.Status)
@@ -100,6 +108,7 @@ func (w *SiteChecker) checkAndSendResult(siteName, url string) {
 	err = w.MessageTemplate.Execute(&doc, NotifyPayload{SiteName: siteName, SiteUrl: url, StatusCode: resp.Status})
 	if err != nil {
 		log.Errorf("Conver template error. %s", err)
+		return
 	}
 	msg := doc.String()
 	log.Infof("[%s] Send message. %s", WORKER_ID, msg)
