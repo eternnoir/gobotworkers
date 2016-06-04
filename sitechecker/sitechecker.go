@@ -30,8 +30,9 @@ type SiteChecker struct {
 }
 
 type NotifyPayload struct {
-	SiteName string
-	SiteUrl  string
+	SiteName   string
+	SiteUrl    string
+	StatusCode string
 }
 
 func (w *SiteChecker) Init(bot *gobot.Gobot) error {
@@ -47,7 +48,7 @@ func (w *SiteChecker) Init(bot *gobot.Gobot) error {
 	w.sites = conf.SiteUrl
 	w.CheckInterval = conf.CheckInterval.Duration
 
-	temlateString := "{{.SiteName}} is dead!!! {{.SiteUrel}}"
+	temlateString := "{{.SiteName}} is dead!!! Status {{.StatusCode}} {{.SiteUrl}}"
 	if conf.MessageTemplate != "" {
 		temlateString = conf.MessageTemplate
 	}
@@ -85,18 +86,18 @@ func (w *SiteChecker) run() {
 }
 
 func (w *SiteChecker) checkAndSendResult(siteName, url string) {
-	status, err := CheckStatus(url)
+	resp, err := CheckStatus(url)
 	if err != nil {
 		log.Debugf("Check %s %s Fail, error %s", siteName, url, err)
 		w.bot.Send(fmt.Sprintf("Check site %s Fail. Error %s", siteName, err))
 		return
 	}
-	log.Debugf("Check %s %s , result %s", siteName, url, status)
-	if status == "200" {
+	log.Debugf("Check %s %s , result %s", siteName, url, resp.Status)
+	if resp.StatusCode == http.StatusOK {
 		return
 	}
 	var doc bytes.Buffer
-	err = w.MessageTemplate.Execute(&doc, NotifyPayload{SiteName: siteName, SiteUrl: url})
+	err = w.MessageTemplate.Execute(&doc, NotifyPayload{SiteName: siteName, SiteUrl: url, StatusCode: resp.Status})
 	if err != nil {
 		log.Errorf("Conver template error. %s", err)
 	}
@@ -105,13 +106,13 @@ func (w *SiteChecker) checkAndSendResult(siteName, url string) {
 	w.bot.Send(msg)
 }
 
-func CheckStatus(url string) (string, error) {
+func CheckStatus(url string) (*http.Response, error) {
 	log.Debugf("Check url %s", url)
 	resp, err := http.Get(url)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	return resp.Status, err
+	return resp, err
 }
 
 func CheckIsUrl(url string) bool {
