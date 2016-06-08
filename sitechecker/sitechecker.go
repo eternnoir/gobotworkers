@@ -9,6 +9,7 @@ import (
 	"github.com/eternnoir/gobot/payload"
 	"net/http"
 	"regexp"
+	"strings"
 	"text/template"
 	"time"
 )
@@ -20,12 +21,14 @@ func init() {
 }
 
 type SiteChecker struct {
-	bot             *gobot.Gobot
-	sites           map[string]string
-	CheckInterval   time.Duration
-	MessageTemplate *template.Template
-	Command         string
-	checking        bool
+	bot                   *gobot.Gobot
+	sites                 map[string]string
+	CheckInterval         time.Duration
+	FailMessageTemplate   *template.Template
+	StatusMessageTemplate *template.Template
+	Command               string
+	checking              bool
+	chatroom              string
 }
 
 type NotifyPayload struct {
@@ -48,22 +51,34 @@ func (w *SiteChecker) Init(bot *gobot.Gobot) error {
 	w.sites = conf.SiteUrl
 	w.CheckInterval = conf.CheckInterval.Duration
 
-	temlateString := "{{.SiteName}} is dead!!! Status {{.StatusCode}} {{.SiteUrl}}"
-	if conf.MessageTemplate != "" {
-		temlateString = conf.MessageTemplate
+	failtemlateString := "{{.SiteName}} is dead!!! Status {{.StatusCode}} {{.SiteUrl}}"
+	if conf.FailMessageTemplate != "" {
+		failtemlateString = conf.FailMessageTemplate
 	}
 
-	tmpl, err := template.New("sitechecker").Parse(temlateString)
+	tmpl, err := template.New("sitechecker").Parse(failtemlateString)
 	if err != nil {
 		return err
 	}
-	w.MessageTemplate = tmpl
+	w.FailMessageTemplate = tmpl
+
+	statusTemplateString := "{{.SiteName}} Status {{.StatusCode}} {{.SiteUrl}}"
+	if conf.StatusMessageTemplate != "" {
+		statusTemplateString = conf.StatusMessageTemplate
+	}
+
+	stmpl, ers := template.New("sitecheckerstatus").Parse(statusTemplateString)
+	if ers != nil {
+		return err
+	}
+	w.StatusMessageTemplate = stmpl
 
 	command := "sitestatus"
-	if conf.Command == "" {
+	if conf.Command != "" {
 		command = conf.Command
 	}
 	w.Command = command
+	w.chatroom = conf.ChatRoom
 	w.checking = false
 	return nil
 }
@@ -72,6 +87,14 @@ func (w *SiteChecker) Process(gobot *gobot.Gobot, message *payload.Message) erro
 	if !w.checking {
 		go w.run()
 	}
+	log.Infof("[%s] Get new message %s", WORKER_ID, message.Text)
+
+	if strings.Contains(message.Text, w.Command) {
+		for sitename, url := range w.sites {
+			go w.checkAndSendResult(sitename, url, w.StatusMessageTemplate, false, message)
+		}
+	}
+
 	return nil
 }
 
@@ -79,40 +102,55 @@ func (w *SiteChecker) run() {
 	w.checking = true
 	for {
 		for sitename, url := range w.sites {
-			go w.checkAndSendResult(sitename, url)
+			go w.checkAndSendResult(sitename, url, w.FailMessageTemplate, true, nil)
 		}
 		time.Sleep(w.CheckInterval)
 	}
 }
 
-func (w *SiteChecker) checkAndSendResult(siteName, url string) {
+func (w *SiteChecker) checkAndSendResult(siteName, url string, templ *template.Template, skipsuccess bool, originMessage *payload.Message) {
 	resp, err := CheckStatus(url)
 	if err != nil {
 		log.Debugf("Check %s %s Fail, error %s", siteName, url, err)
-		var doc bytes.Buffer
-		err = w.MessageTemplate.Execute(&doc, NotifyPayload{SiteName: siteName, SiteUrl: url, Msg: err.Error()})
+		msg, err := w.GetMsg(templ, NotifyPayload{SiteName: siteName, SiteUrl: url, Msg: err.Error()})
 		if err != nil {
-			log.Errorf("Conver template error. %s", err)
+			log.Error(err)
 			return
 		}
-		msg := doc.String()
 		log.Infof("[%s] Send message. %s", WORKER_ID, msg)
-		w.bot.Send(msg)
+		w.sendMessage(msg, originMessage)
 		return
 	}
 	log.Debugf("Check %s %s , result %s", siteName, url, resp.Status)
-	if resp.StatusCode == http.StatusOK {
+	if resp.StatusCode == http.StatusOK && skipsuccess {
 		return
 	}
+	msg, err := w.GetMsg(templ, NotifyPayload{SiteName: siteName, SiteUrl: url, StatusCode: resp.Status})
+	if err != nil {
+		log.Error(err)
+		return
+	}
+	log.Infof("[%s] Send message. %s", WORKER_ID, msg)
+	w.sendMessage(msg, originMessage)
+}
+
+func (w *SiteChecker) GetMsg(template *template.Template, payload NotifyPayload) (string, error) {
 	var doc bytes.Buffer
-	err = w.MessageTemplate.Execute(&doc, NotifyPayload{SiteName: siteName, SiteUrl: url, StatusCode: resp.Status})
+	err := template.Execute(&doc, payload)
 	if err != nil {
 		log.Errorf("Conver template error. %s", err)
-		return
+		return "", err
 	}
 	msg := doc.String()
-	log.Infof("[%s] Send message. %s", WORKER_ID, msg)
-	w.bot.Send(msg)
+	return msg, err
+}
+
+func (w *SiteChecker) sendMessage(msg string, originMessage *payload.Message) {
+	if originMessage == nil {
+		w.bot.SendToChat(msg, w.chatroom)
+	} else {
+		w.bot.Reply(originMessage, msg)
+	}
 }
 
 func CheckStatus(url string) (*http.Response, error) {

@@ -5,10 +5,12 @@ import (
 )
 
 type Config struct {
-	SiteUrl         map[string]string
-	MessageTemplate string
-	CheckInterval   duration
-	Command         string
+	SiteUrl               map[string]string
+	FailMessageTemplate   string
+	StatusMessageTemplate string
+	ChatRoom              string
+	CheckInterval         duration
+	Command               string
 }
 
 type duration struct {
